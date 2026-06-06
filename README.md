@@ -1,6 +1,8 @@
-# Next.js template
+# verticals-management-app
 
-This is a Next.js template with shadcn/ui.
+Vertical management app where verticals can manage staff, customers, bookings, and related operations.
+
+This project uses Next.js with shadcn/ui.
 
 ## Adding components
 
