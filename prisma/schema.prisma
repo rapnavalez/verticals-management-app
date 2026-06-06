@@ -1,0 +1,424 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../lib/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ─── Enums ────────────────────────────────────────────────────────────────────
+
+enum UserRole {
+  owner
+  admin
+  staff
+}
+
+enum UserStatus {
+  active
+  suspended
+}
+
+enum InviteStatus {
+  pending
+  accepted
+  revoked
+  expired
+}
+
+enum BusinessStatus {
+  active
+  closed
+}
+
+enum BookingPolicy {
+  auto_confirm
+  requires_approval
+}
+
+enum AppointmentStatus {
+  pending
+  confirmed
+  completed
+  cancelled
+  no_show
+}
+
+enum AppointmentSource {
+  staff
+  public
+}
+
+enum AppointmentServiceStatus {
+  pending
+  confirmed
+  completed
+  cancelled
+}
+
+enum BookingRequestType {
+  new_booking
+  reschedule
+}
+
+enum BookingRequestStatus {
+  pending
+  approved
+  rejected
+  expired
+}
+
+enum NotificationAudience {
+  business
+  customer
+}
+
+enum NotificationChannel {
+  sms
+  email
+  in_app
+}
+
+enum NotificationStatus {
+  pending
+  sent
+  failed
+  delivered
+}
+
+enum JobStatus {
+  pending
+  processing
+  completed
+  failed
+}
+
+// ─── Core entities ────────────────────────────────────────────────────────────
+
+model Business {
+  id                 String         @id @default(uuid())
+  name               String
+  type               String
+  address            String?
+  timezone           String
+  phone              String?
+  email              String?
+  logoUrl            String?
+  brandColors        Json?
+  onboardingComplete Boolean        @default(false)
+  status             BusinessStatus @default(active)
+  createdAt          DateTime       @default(now())
+  updatedAt          DateTime       @updatedAt
+
+  settings        BusinessSettings?
+  users           User[]
+  customers       Customer[]
+  services        Service[]
+  blackoutDates   BlackoutDate[]
+  appointments    Appointment[]
+  bookingRequests BookingRequest[]
+  invites         Invite[]
+  notifications   Notification[]
+  jobs            Job[]
+
+  @@map("businesses")
+}
+
+// operatingHours shape (JSON):
+// { mon: { open: "09:00", close: "18:00", closed: false }, tue: …, … }
+model BusinessSettings {
+  id           String  @id @default(uuid())
+  businessId   String  @unique
+  business     Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  operatingHours       Json
+  bufferMinutes        Int           @default(0)
+  slotInterval         Int           @default(15)
+  minLeadTimeMinutes   Int           @default(0)
+  rescheduleNoticeHours Int          @default(24)
+  cancelNoticeHours    Int           @default(24)
+  bookingPolicy        BookingPolicy @default(requires_approval)
+  onlineBookingEnabled Boolean       @default(false)
+  reminderEnabled      Boolean       @default(true)
+  confirmationOptOut   Boolean       @default(false)
+  reminderOptOut       Boolean       @default(false)
+  senderId             String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("business_settings")
+}
+
+model BlackoutDate {
+  id         String   @id @default(uuid())
+  businessId String
+  business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  date       DateTime @db.Date
+  label      String?
+
+  createdAt  DateTime @default(now())
+
+  @@unique([businessId, date])
+  @@map("blackout_dates")
+}
+
+// id matches the Supabase Auth user UUID.
+// One-owner-per-business is enforced via a partial unique index in migration:
+//   CREATE UNIQUE INDEX one_owner_per_business ON users (business_id) WHERE role = 'owner';
+model User {
+  id         String     @id
+  businessId String
+  business   Business   @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  name       String
+  email      String
+  role       UserRole
+  status     UserStatus @default(active)
+
+  createdAt  DateTime   @default(now())
+  updatedAt  DateTime   @updatedAt
+
+  serviceCapabilities StaffServiceCapability[]
+  schedules           StaffSchedule[]
+  timeOff             StaffTimeOff[]
+  appointmentServices AppointmentService[]
+
+  @@unique([businessId, email])
+  @@map("users")
+}
+
+model Invite {
+  id         String       @id @default(uuid())
+  businessId String
+  business   Business     @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  email      String
+  role       UserRole
+  token      String       @unique @default(uuid())
+  status     InviteStatus @default(pending)
+  expiresAt  DateTime
+
+  createdAt  DateTime     @default(now())
+  updatedAt  DateTime     @updatedAt
+
+  @@map("invites")
+}
+
+// phone is the hard-unique match key (UNIQUE per business).
+model Customer {
+  id         String    @id @default(uuid())
+  businessId String
+  business   Business  @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  name       String
+  phone      String
+  email      String?
+  notes      String?
+  deletedAt  DateTime?
+
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  appointments Appointment[]
+
+  @@unique([businessId, phone])
+  @@map("customers")
+}
+
+model Service {
+  id             String    @id @default(uuid())
+  businessId     String
+  business       Business  @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  name           String
+  durationMin    Int
+  price          Decimal   @db.Decimal(10, 2)
+  bookableOnline Boolean   @default(true)
+  archivedAt     DateTime?
+
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  staffCapabilities   StaffServiceCapability[]
+  appointmentServices AppointmentService[]
+
+  @@map("services")
+}
+
+model StaffServiceCapability {
+  id        String  @id @default(uuid())
+  userId    String
+  user      User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  serviceId String
+  service   Service @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, serviceId])
+  @@map("staff_service_capabilities")
+}
+
+// schedule shape (JSON): same weekday structure as BusinessSettings.operatingHours
+// plus optional breaks: { mon: { start: "09:00", end: "17:00", active: true, breaks: [{start, end}] }, … }
+model StaffSchedule {
+  id       String   @id @default(uuid())
+  userId   String   @unique
+  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  schedule Json
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("staff_schedules")
+}
+
+model StaffTimeOff {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  startDate DateTime @db.Date
+  endDate   DateTime @db.Date
+  reason    String?
+
+  createdAt DateTime @default(now())
+
+  @@map("staff_time_off")
+}
+
+// ─── Bookings ─────────────────────────────────────────────────────────────────
+
+model Appointment {
+  id           String            @id @default(uuid())
+  businessId   String
+  business     Business          @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  customerId   String
+  customer     Customer          @relation(fields: [customerId], references: [id])
+
+  status       AppointmentStatus @default(pending)
+  startAt      DateTime
+  endAt        DateTime
+  source       AppointmentSource
+  cancelReason String?
+
+  createdAt    DateTime          @default(now())
+  updatedAt    DateTime          @updatedAt
+
+  services        AppointmentService[]
+  bookingRequests BookingRequest[]
+
+  @@map("appointments")
+}
+
+model AppointmentService {
+  id            String                   @id @default(uuid())
+  appointmentId String
+  appointment   Appointment              @relation(fields: [appointmentId], references: [id], onDelete: Cascade)
+  serviceId     String
+  service       Service                  @relation(fields: [serviceId], references: [id])
+  staffId       String?
+  staff         User?                    @relation(fields: [staffId], references: [id])
+
+  startAt       DateTime
+  endAt         DateTime
+  status        AppointmentServiceStatus @default(pending)
+
+  createdAt     DateTime                 @default(now())
+  updatedAt     DateTime                 @updatedAt
+
+  @@map("appointment_services")
+}
+
+model BookingRequest {
+  id            String               @id @default(uuid())
+  businessId    String
+  business      Business             @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  appointmentId String?
+  appointment   Appointment?         @relation(fields: [appointmentId], references: [id])
+
+  type          BookingRequestType
+  payload       Json
+  requestedSlot DateTime
+  status        BookingRequestStatus @default(pending)
+  expiresAt     DateTime
+
+  createdAt     DateTime             @default(now())
+  updatedAt     DateTime             @updatedAt
+
+  @@map("booking_requests")
+}
+
+// Temporary reservation during public checkout. Subtracted by availability engine.
+model SlotHold {
+  id         String   @id @default(uuid())
+  businessId String
+  staffId    String
+  serviceId  String
+
+  startAt    DateTime
+  endAt      DateTime
+  expiresAt  DateTime
+
+  createdAt  DateTime @default(now())
+
+  @@index([businessId, expiresAt])
+  @@map("slot_holds")
+}
+
+model PhoneVerification {
+  id         String   @id @default(uuid())
+  businessId String
+  phone      String
+  codeHash   String
+  attempts   Int      @default(0)
+  expiresAt  DateTime
+
+  createdAt  DateTime @default(now())
+
+  @@index([businessId, phone])
+  @@map("phone_verifications")
+}
+
+// ─── Infrastructure ───────────────────────────────────────────────────────────
+
+model Notification {
+  id         String               @id @default(uuid())
+  businessId String
+  business   Business             @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  audience   NotificationAudience
+  channel    NotificationChannel
+  type       String
+  status     NotificationStatus   @default(pending)
+  template   String
+  recipient  String
+  attempts   Int                  @default(0)
+  lastError  String?
+
+  createdAt  DateTime             @default(now())
+  updatedAt  DateTime             @updatedAt
+
+  @@map("notifications")
+}
+
+// Durable job queue polled by Vercel Cron. businessId nullable for global jobs.
+model Job {
+  id         String    @id @default(uuid())
+  businessId String?
+  business   Business? @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  type       String
+  status     JobStatus @default(pending)
+  runAfter   DateTime
+  attempts   Int       @default(0)
+  lastError  String?
+  payload    Json
+
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  @@index([status, runAfter])
+  @@map("jobs")
+}
