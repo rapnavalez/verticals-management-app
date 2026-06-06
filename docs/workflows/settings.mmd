@@ -1,0 +1,50 @@
+%% Settings — business configuration hub
+%% Access: Admin/Owner. A few sections are Owner-only (billing, danger zone).
+%% Values here feed: availability engine (hours/buffer/blackout), public-booking (enable + policy),
+%% booking flows (notice windows), notifications (reminder/opt-out), and the service catalog used everywhere.
+flowchart TD
+    Start([Open Settings]) --> Gate{Role = Admin/Owner?}
+    Gate -->|No| Denied[Settings not available to Staff] --> End([Exit])
+    Gate -->|Yes| Hub{Settings section}
+
+    %% --- Business profile ---
+    Hub -->|Business profile| Profile[Name, type, address,<br/>timezone, contact] --> SaveProfile[(Save)] --> Hub
+
+    %% --- Branding ---
+    Hub -->|Branding| Brand[Logo, colors,<br/>public page appearance] --> SaveBrand[(Save)] --> Hub
+
+    %% --- Operating hours + blackout (business-level availability) ---
+    Hub -->|Operating hours| Hours[Weekly open/close hours] --> SaveHours[(Save → availability engine)] --> Hub
+    Hub -->|Blackout dates| Blackout[Holidays / closures] --> SaveBlackout[(Save → availability engine)] --> Hub
+
+    %% --- Booking rules ---
+    Hub -->|Booking rules| Rules[Buffer: none / 5 / 10 / 15 min,<br/>slot interval: 15 min,<br/>min lead time,<br/>reschedule + cancel notice windows]
+    Rules --> SaveRules[(Save → booking + public-booking)] --> Hub
+
+    %% --- Booking policy (default: requires approval) ---
+    Hub -->|Booking policy| Policy[Auto-confirm vs requires approval<br/>default: requires approval<br/>note: 'any available' always queues regardless]
+    Policy --> SavePolicy[(Save → public-booking)] --> Hub
+
+    %% --- Online booking toggle (drives the Enabled gate in public-booking) ---
+    Hub -->|Online booking| Online[Enable / disable public booking page]
+    Online --> SaveOnline[(Save → public-booking Enabled gate)] --> Hub
+
+    %% --- Notifications (reminder timing is fixed at 5h, not configurable) ---
+    Hub -->|Notifications| Notif[Reminder on/off, sender ID,<br/>default opt-out settings] --> SaveNotif[(Save → notifications)] --> Hub
+
+    %% --- Service catalog (used by booking, public-booking, staff capabilities) ---
+    Hub -->|Services| Catalog[Service catalog list]
+    Catalog --> SvcAction{Action}
+    SvcAction -->|Add| AddSvc[Name, duration, price,<br/>bookable-online toggle] --> SaveSvc[(Create service)] --> Catalog
+    SvcAction -->|Edit| EditSvc[Update fields / online toggle] --> SaveSvcEdit[(Save)] --> Catalog
+    SvcAction -->|Archive| ArchiveCheck{Future bookings use it?}
+    ArchiveCheck -->|Yes| ArchiveOnly[Archive: hide from new bookings,<br/>keep existing + history] --> Catalog
+    ArchiveCheck -->|No| ArchiveOnly
+
+    %% --- Owner-only: danger zone (billing/plan is out of scope for v1) ---
+    Hub -->|Danger zone| OwnerDz{Role = Owner?}
+    OwnerDz -->|No| Denied2[Owner only] --> Hub
+    OwnerDz -->|Yes| Danger{Action}
+    Danger -->|Close business| CloseConfirm{Confirm + type business name?}
+    CloseConfirm -->|No| Hub
+    CloseConfirm -->|Yes| CloseBiz[(Deactivate business,<br/>retain data per policy, revoke access)] --> End

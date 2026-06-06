@@ -1,0 +1,51 @@
+%% Customer Management — list/search, add, edit, delete, merge
+%% Role gating: Staff is view-only. Add/edit/delete/merge are Admin/Owner only.
+%% Phone is a HARD-UNIQUE key (source of truth for public-booking match). Email/name are soft duplicate warnings.
+flowchart TD
+    Start([Open Customers]) --> List[Customer list<br/>search, filter, sort]
+    List --> Action{Choose action}
+
+    %% --- View is open to all roles ---
+    Action -->|Open| Profile[Customer profile<br/>details, bookings, history]
+
+    %% --- Any write action requires Admin/Owner ---
+    Action -->|Add| CanWrite{Role = Admin/Owner?}
+    Action -->|Merge| CanWrite
+    Profile -->|Edit / Delete| CanWrite
+    CanWrite -->|No| Denied[Action not permitted<br/>Staff is view-only] --> List
+
+    %% --- Add ---
+    CanWrite -->|Add| AddForm[New customer form<br/>name, contact, notes]
+    AddForm --> PhoneCheck{Phone already exists?}
+    PhoneCheck -->|Yes| PhoneBlock[Block — phone must be unique;<br/>open the existing record instead] --> Profile
+    PhoneCheck -->|No| DupCheck{Soft duplicate?<br/>match email/name}
+    DupCheck -->|Match found| DupWarn[Warn + show matches]
+    DupWarn --> DupDecide{Proceed anyway?}
+    DupDecide -->|No, open existing| Profile
+    DupDecide -->|Yes, create| SaveNew[(Create customer)]
+    DupCheck -->|No match| SaveNew
+    SaveNew --> Profile
+
+    %% --- Edit ---
+    CanWrite -->|Edit| Edit[Edit fields]
+    Edit --> ValidEdit{Valid?}
+    ValidEdit -->|No| Edit
+    ValidEdit -->|Yes| SaveEdit[(Save changes)] --> Profile
+
+    %% --- Delete ---
+    CanWrite -->|Delete| DelConfirm{Confirm delete?}
+    DelConfirm -->|No| Profile
+    DelConfirm -->|Yes| HasBookings{Active/future bookings?}
+    HasBookings -->|Yes| BlockDel[Block — resolve bookings first] --> Profile
+    HasBookings -->|No| SoftDelete[(Soft delete + retain history)]
+    SoftDelete --> List
+
+    %% --- Merge ---
+    CanWrite -->|Merge| PickRecords[Select 2+ duplicate records]
+    PickRecords --> PickPrimary[Choose primary record]
+    PickPrimary --> Resolve[Resolve conflicting fields<br/>pick value per field]
+    Resolve --> MergePreview[Preview merged result<br/>combined bookings + history]
+    MergePreview --> MergeConfirm{Confirm merge?}
+    MergeConfirm -->|No| List
+    MergeConfirm -->|Yes| DoMerge[(Merge: move history to primary,<br/>archive secondaries)]
+    DoMerge --> Profile

@@ -1,0 +1,84 @@
+%% Booking Management — staff-side: create, reschedule, cancel, complete, availability
+%% Role gating: Staff is view-only. Writes (create/reschedule/cancel/no-show/complete/availability) are Admin/Owner only.
+%% Model: parent Appointment (the visit) + child Service items. Each child has its own service, staff, duration.
+%% Staff have service capabilities; the staff-picker is filtered to who can perform each service.
+%% Availability is computed from SCHEDULED blocks + buffers + hours — never from actual completion time.
+%% Customer-initiated bookings live in public-booking.mmd.
+flowchart TD
+    Start([Open Bookings]) --> View[Calendar / list view<br/>filter by staff, service, date, status]
+    View --> Action{Choose action}
+
+    %% --- View open to all; writes require Admin/Owner ---
+    Action -->|Open appointment| Detail[Appointment detail<br/>visit + child services]
+    Action -->|New appointment| CanWrite{Role = Admin/Owner?}
+    Action -->|Manage availability| AvailLink[/Staff schedules + time off — see staff-management.mmd<br/>Business hours + buffer — see settings/] --> View
+    Action -->|Pending requests| Queue[Approval queue<br/>new + reschedule requests from public-booking.mmd]
+    Detail -->|Reschedule / Cancel / No-show / Complete| CanWrite
+    CanWrite -->|No| Denied[Action not permitted<br/>Staff is view-only] --> View
+
+    %% --- Create (parent appointment + 1..n service children) ---
+    CanWrite -->|New appointment| PickCustomer[Find customer]
+    PickCustomer --> CustExists{Customer exists?}
+    CustExists -->|No| NewCust[/Add new customer — see customer-management.mmd/]
+    NewCust --> AddService
+    CustExists -->|Yes| AddService[Add service to visit]
+    AddService --> PickStaff[Select staff<br/>filtered by service capability]
+    PickStaff --> MoreSvc{Add another service?}
+    MoreSvc -->|Yes| AddService
+    MoreSvc -->|No| Arrange{One service only?}
+    Arrange -->|Yes| PickSlot
+    Arrange -->|No, multiple| SeqPar{Sequential or parallel?}
+    SeqPar -->|Sequential, same/any staff| PickSlot[Pick start date + time]
+    SeqPar -->|Parallel, different staff| PickSlot
+    PickSlot --> SlotFree{Composite slot available?<br/>each child fits duration + buffer,<br/>assigned staff free, within hours}
+    SlotFree -->|No| ShowConflict[Show conflict / suggest slots] --> PickSlot
+    SlotFree -->|Yes| Create[(Create appointment + child services)]
+    Create --> Notify[/Send confirmation — see notifications.mmd/]
+    Notify --> Booked([Appointment confirmed])
+
+    %% --- Reschedule (whole visit or one service) ---
+    CanWrite -->|Reschedule| ReScope{Whole visit or single service?}
+    ReScope -->|Whole visit| NewSlot[Pick new start / staff<br/>staff filtered by capability]
+    ReScope -->|Single service| NewSlot
+    NewSlot --> ReSlotFree{New slot available?<br/>duration + buffer}
+    ReSlotFree -->|No| ShowConflict2[Show conflict / suggest slots] --> NewSlot
+    ReSlotFree -->|Yes| Policy{Within reschedule policy?<br/>notice window}
+    Policy -->|No, late| WarnLate[Warn — late reschedule] --> ConfirmRe
+    Policy -->|Yes| ConfirmRe{Confirm?}
+    ConfirmRe -->|No| Detail
+    ConfirmRe -->|Yes| UpdateBooking[(Update times + free old slots,<br/>recompute parent window)]
+    UpdateBooking --> NotifyRe[/Notify customer + staff/] --> Detail
+
+    %% --- Cancel (whole visit or one service; record only, no fee) ---
+    CanWrite -->|Cancel| CancelScope{Whole visit or single service?}
+    CancelScope -->|Single service| CancelConfirm{Confirm cancel?}
+    CancelScope -->|Whole visit| CancelConfirm
+    CancelConfirm -->|No| Detail
+    CancelConfirm -->|Yes| DoCancel[(Cancel + free slot, record reason)]
+    DoCancel --> LastChild{Last remaining service?}
+    LastChild -->|Yes| CancelParent[(Cancel parent appointment)]
+    LastChild -->|No| Recompute[(Recompute parent window)]
+    CancelParent --> NotifyCancel[/Notify customer + staff/]
+    Recompute --> NotifyCancel
+    NotifyCancel --> View
+
+    %% --- No-show (record only) ---
+    CanWrite -->|No-show| NoShow[(Mark no-show,<br/>record on customer history)] --> View
+
+    %% --- Complete (status only — does NOT free availability) ---
+    CanWrite -->|Complete| MarkDone[(Mark service/visit completed)]
+    MarkDone --> Note[Status change only;<br/>scheduled block stays reserved until its end] --> Detail
+
+    %% --- Approval queue (public-booking requests; default policy = requires approval) ---
+    Queue --> OpenReq[Open pending request<br/>new booking or reschedule;<br/>customer, services, requested slot]
+    OpenReq -->|Approve / Decline| CanWrite
+    CanWrite -->|Approve| AssignStaff{Any service still 'any available'?}
+    AssignStaff -->|Yes| PickAssignee[Assign a capable staff member<br/>per unassigned service] --> StillFree
+    AssignStaff -->|No| StillFree{Requested slot still available?<br/>hold may have expired}
+    StillFree -->|Yes| Approve[(Confirm new booking<br/>or apply reschedule + free old slot)]
+    Approve --> NotifyApprove[/SMS customer — confirmed/] --> Queue
+    StillFree -->|No| Conflict[Show conflict] --> Resolve{Offer alternative or decline?}
+    Resolve -->|Offer slot| ProposeSlot[/SMS customer alternative slots/] --> Queue
+    Resolve -->|Decline| Decline
+    CanWrite -->|Decline| Decline[(Decline request, release slot)]
+    Decline --> NotifyDecline[/SMS customer — declined/] --> Queue

@@ -1,0 +1,70 @@
+%% Staff Management — invite, roles, capabilities, schedules, suspend/remove
+%% Permission model:
+%%   Owner  — manage everyone; invite Admin/Staff; change roles; transfer ownership; remove anyone.
+%%   Admin  — manage Staff only; cannot manage other Admins or the Owner.
+%%   Staff  — view-only; can see own profile + schedule.
+%% Invite acceptance is handled in dashboard-access.mmd. Schedules feed the availability engine in booking-management.mmd.
+flowchart TD
+    Start([Open Staff]) --> List[Staff list<br/>name, role, status, services]
+    List --> Action{Choose action}
+
+    %% --- View own profile is open to all roles ---
+    Action -->|Open staff member| Profile[Staff profile<br/>role, capabilities, schedule, status]
+
+    %% --- Write actions gate by role + target ---
+    Action -->|Invite| CanInvite{Role = Owner/Admin?}
+    CanInvite -->|No| Denied[Action not permitted] --> List
+    Profile -->|Edit / Suspend / Remove / Change role| Scope{Actor allowed on this target?}
+    Scope -->|Admin acting on Admin/Owner| Denied
+    Scope -->|Allowed| EditAction{Which action?}
+
+    %% --- Invite ---
+    CanInvite -->|Yes| InviteForm[Invite form<br/>email + role + services they can perform]
+    InviteForm --> RoleAllowed{Inviting role actor may grant?<br/>Admin can invite Staff only}
+    RoleAllowed -->|No| Denied
+    RoleAllowed -->|Yes| SendInvite[(Create pending invite)]
+    SendInvite --> EmailInvite[/Email invite link — accepted in dashboard-access.mmd/]
+    EmailInvite --> List
+
+    %% --- Pending invite management ---
+    Action -->|Open pending invite| PendingInvite[Pending invite]
+    PendingInvite --> InviteOps{Resend or revoke?}
+    InviteOps -->|Resend| ResendInvite[/Re-send invite link/] --> List
+    InviteOps -->|Revoke| RevokeInvite[(Revoke invite)] --> List
+
+    %% --- Edit profile / capabilities ---
+    EditAction -->|Edit| EditForm[Edit profile + role + capabilities<br/>services they can perform]
+    EditForm --> SaveEdit[(Save changes)] --> Profile
+
+    %% --- Change role ---
+    EditAction -->|Change role| RoleChange[Set role: Admin / Staff]
+    RoleChange --> SaveRole[(Update role)] --> Profile
+
+    %% --- Manage schedule / time off (feeds availability engine) ---
+    Action -->|Manage schedule| CanSched{Role = Owner/Admin?}
+    CanSched -->|No| Denied
+    CanSched -->|Yes| Schedule[Set per-staff working hours,<br/>breaks, time off] --> SaveSched[(Save schedule)] --> List
+
+    %% --- Suspend / reactivate (drives Suspended gate in dashboard-access.mmd) ---
+    EditAction -->|Suspend| Suspend[(Set status = Suspended)]
+    Suspend --> FutureSusp{Has future bookings?}
+    FutureSusp -->|Yes| ReassignSusp[Reassign or cancel upcoming bookings]
+    FutureSusp -->|No| DoneSusp[Access revoked on next login]
+    ReassignSusp --> DoneSusp --> Profile
+    Profile -->|Reactivate| Reactivate[(Set status = Active)] --> Profile
+
+    %% --- Remove staff ---
+    EditAction -->|Remove| RemoveConfirm{Confirm remove?}
+    RemoveConfirm -->|No| Profile
+    RemoveConfirm -->|Yes| FutureRem{Has future bookings?}
+    FutureRem -->|Yes| ReassignRem[Reassign bookings to other<br/>capable staff, or cancel]
+    FutureRem -->|No| DoRemove
+    ReassignRem --> DoRemove[(Deactivate + revoke access,<br/>retain past records)] --> List
+
+    %% --- Transfer ownership (Owner only) ---
+    Action -->|Transfer ownership| IsOwner{Role = Owner?}
+    IsOwner -->|No| Denied
+    IsOwner -->|Yes| PickNewOwner[Select an Admin as new Owner]
+    PickNewOwner --> ConfirmXfer{Confirm transfer?}
+    ConfirmXfer -->|No| List
+    ConfirmXfer -->|Yes| DoXfer[(Promote target to Owner,<br/>demote self to Admin)] --> List

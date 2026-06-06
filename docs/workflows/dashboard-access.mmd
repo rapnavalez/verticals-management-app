@@ -1,0 +1,44 @@
+%% Dashboard Access — signup, invite acceptance, login, role gating
+%% Single business per account. Roles: Owner / Admin / Staff. No MFA.
+flowchart TD
+    Start([User visits app]) --> Entry{Entry point?}
+
+    %% --- Self-serve signup (creates the business) ---
+    Entry -->|Sign up| Signup[Sign up form]
+    Signup --> CreateOrg[Create business / clinic]
+    CreateOrg --> VerifyEmail[Send email verification]
+    VerifyEmail --> EmailConfirmed{Email confirmed?}
+    EmailConfirmed -->|No| VerifyEmail
+    EmailConfirmed -->|Yes| OwnerRole[Assign Owner role]
+    OwnerRole --> Onboarded{Onboarding complete?}
+    Onboarded -->|No| Onboarding[/Setup wizard — see onboarding.mmd/]
+    Onboarding --> Dashboard
+    Onboarded -->|Yes| Dashboard
+
+    %% --- Invited user accepting an invite ---
+    Entry -->|Invite link| AcceptInvite[Open invitation]
+    AcceptInvite --> InviteValid{Invite valid / not expired?}
+    InviteValid -->|No| InviteError[Show expired/invalid] --> End
+    InviteValid -->|Yes| SetPassword[Set name + password]
+    SetPassword --> MarkVerified[Mark email verified<br/>invite link proves ownership]
+    MarkVerified --> InviteRole[Assign invited role: Admin or Staff]
+    InviteRole --> RoleGate
+
+    %% --- Returning user login ---
+    Entry -->|Log in| Login[Login form]
+    Login --> AuthCheck{Email + password valid?}
+    AuthCheck -->|No| LoginError[Show error] --> Login
+    AuthCheck -->|Yes| EmailVerified{Email verified?}
+    EmailVerified -->|No| VerifyEmail
+    EmailVerified -->|Yes| RoleGate
+
+    %% --- Role gating ---
+    RoleGate{Role?}
+    RoleGate -->|Owner| Onboarded
+    RoleGate -->|Admin| Dashboard[Full dashboard]
+    RoleGate -->|Staff| StaffView[Limited dashboard]
+    RoleGate -->|Suspended| Denied[Access denied] --> End
+
+    Dashboard --> Active([Session active])
+    StaffView --> Active
+    End([Exit])

@@ -1,0 +1,51 @@
+%% Availability Engine — shared computation, NOT a user-facing workflow.
+%% Called by booking-management (validate a slot, suggest slots) and public-booking (search, hold).
+%% Single rule of truth: availability is derived from SCHEDULED blocks only.
+%% Completing a booking early does NOT free its remaining time.
+%%
+%% Inputs: service(s) + duration each, requested staff (specific or "any"), date/time or date range.
+%% Config pulled from settings + staff-management:
+%%   business hours, blackout dates, buffer; per-staff working hours, breaks, time off, capabilities;
+%%   existing scheduled bookings; min lead time.
+flowchart TD
+    Start([Request]) --> Mode{Mode?}
+    Mode -->|Validate a specific slot| ValidateIn[Proposed start + service set + staff]
+    Mode -->|Search open slots| SearchIn[Date range + service set + staff pref]
+
+    %% --- Resolve which staff can serve each service ---
+    ValidateIn --> Capable
+    SearchIn --> Capable[For each service:<br/>candidate staff = capability ∩ requested<br/>'any' = all capable staff]
+    Capable --> AnyNote[/"any available": a slot is open if ≥1 capable staff is free;<br/>the actual person is assigned later by an Admin at confirm/]
+    AnyNote --> Cap0{Any capable staff?}
+    Cap0 -->|No| NoStaff[No one can perform this service] --> Empty([Return: unavailable / no slots])
+
+    %% --- Build each candidate staff's free windows for the day(s) ---
+    Cap0 -->|Yes| FreeWin[Build free windows per staff:<br/>business hours ∩ staff working hours]
+    FreeWin --> Subtract[Subtract unavailable time:<br/>blackout dates, time off, breaks,<br/>existing bookings each padded by buffer,<br/>active (unexpired) slot holds]
+    Subtract --> Lead[Drop time earlier than now + min lead time]
+    Lead --> Branch{Single or multi-service?}
+
+    %% --- Single service ---
+    Branch -->|Single| Fit1[Need a free window ≥ duration + buffer]
+
+    %% --- Multi-service ---
+    Branch -->|Multi, sequential| Seq[Same staff free for a CONTIGUOUS block =<br/>sum of durations + inter-service buffers]
+    Branch -->|Multi, parallel| Par[Each service's staff free during the<br/>OVERLAPPING visit window]
+    Fit1 --> ModeSplit
+    Seq --> ModeSplit
+    Par --> ModeSplit
+
+    %% --- Diverge by mode ---
+    ModeSplit{Validate or Search?}
+
+    %% Validate path
+    ModeSplit -->|Validate| Check{Proposed slot fits<br/>all constraints?}
+    Check -->|Yes| OK([Return: available])
+    Check -->|No| Conflict([Return: conflict + reason])
+
+    %% Search path
+    ModeSplit -->|Search| Gen[Generate candidate starts<br/>across free windows at 15-min interval]
+    Gen --> Collect[Union across staff,<br/>dedupe start times, sort]
+    Collect --> Any{Any slots?}
+    Any -->|Yes| Slots([Return: ranked open slots])
+    Any -->|No| Empty

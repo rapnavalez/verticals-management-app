@@ -1,0 +1,31 @@
+%% Onboarding — first-run setup wizard for a newly created business (Owner only)
+%% Entered from dashboard-access.mmd when Onboarding is incomplete.
+%% Steps are skippable; progress is saved so the Owner can resume later.
+flowchart TD
+    Start([Owner enters setup wizard]) --> Resume{Resume in progress?}
+    Resume -->|Yes| LastStep[Jump to last incomplete step]
+    Resume -->|No| Business
+
+    Business[Step 1 — Business profile<br/>name, type, address, timezone] --> SaveBiz[(Save progress)]
+    SaveBiz --> Hours
+
+    Hours[Step 2 — Operating hours] --> SaveHours[(Save progress)]
+    SaveHours --> Services
+
+    Services[Step 3 — Add services<br/>name, duration, price] --> SvcAdded{At least one service?}
+    SvcAdded -->|No, skip| Staff
+    SvcAdded -->|Yes| SaveSvc[(Save progress)] --> Staff
+
+    Staff[Step 4 — Invite staff<br/>email + role +<br/>services they can perform] --> InviteSent[/Send invites — see staff-management.mmd/]
+    InviteSent --> SaveStaff[(Save progress)]
+    SaveStaff --> Settings
+
+    Settings[Step 5 — Dashboard settings<br/>branding, booking rules, notifications] --> SaveSettings[(Save progress)]
+    SaveSettings --> Review
+
+    Review[Review summary] --> Confirm{Finish setup?}
+    Confirm -->|Edit a step| LastStep
+    Confirm -->|Finish| MarkComplete[Mark onboarding complete]
+    MarkComplete --> Dashboard([Go to full dashboard])
+
+    LastStep --> Business

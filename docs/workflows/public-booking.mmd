@@ -1,0 +1,63 @@
+%% Public Booking — customer-facing self-service (phone + OTP, no account)
+%% Actor: a customer on the business's public booking page.
+%% Market: PH — phone is the primary identifier and channel (SMS-first), email optional.
+%% Reuses the same availability engine and parent+child model as booking-management.mmd.
+%% Customer matched-or-created by PHONE (source of truth); OTP gates against spam/fake bookings.
+flowchart TD
+    Start([Customer opens public booking page]) --> Enabled{Online booking enabled?}
+    Enabled -->|No| Closed[Show "booking unavailable"<br/>contact business directly] --> End([Exit])
+
+    %% --- Build the visit (parent + 1..n online-bookable services) ---
+    Enabled -->|Yes| AddService[Select a service<br/>online-bookable only]
+    AddService --> PickStaff[Choose staff:<br/>Any available, or a specific person<br/>filtered by capability]
+    PickStaff --> MoreSvc{Add another service?}
+    MoreSvc -->|Yes| AddService
+    MoreSvc -->|No| PickSlot[Pick date + time]
+    PickSlot --> SlotFree{Composite slot available?<br/>each service fits duration + buffer,<br/>staff free, within hours}
+    SlotFree -->|No| SuggestSlots[Show next available slots] --> PickSlot
+    SlotFree -->|Yes| HoldSlot[Temporarily hold slot<br/>during checkout]
+
+    %% --- Phone + OTP (anti-spam gate) ---
+    HoldSlot --> EnterPhone[Enter phone number]
+    EnterPhone --> SendOTP[/Send OTP via SMS/]
+    SendOTP --> VerifyOTP{OTP correct?}
+    VerifyOTP -->|No| RetryOTP{Retries / resend left?}
+    RetryOTP -->|Yes| VerifyOTP
+    RetryOTP -->|No| ReleaseHold[Release held slot] --> End
+
+    %% --- Match-or-create by phone ---
+    VerifyOTP -->|Yes| Match{Customer exists?<br/>match by phone}
+    Match -->|Yes| Prefill[Pre-fill saved details<br/>customer confirms/updates]
+    Match -->|No| InfoForm[Customer information form<br/>name, email optional, notes]
+    InfoForm --> CreateCust[(Create new customer)]
+    Prefill --> Policy
+    CreateCust --> Policy
+
+    %% --- Routing: 'any available' must be assigned by an Admin, so it always queues ---
+    Policy{Any service set to "any available"?}
+    Policy -->|Yes| Pending[(Create pending request<br/>Admin assigns staff + confirms)]
+    Policy -->|No| PolicySet{Booking policy setting?}
+    PolicySet -->|Requires approval — default| Pending
+    PolicySet -->|Auto-confirm| Create[(Create confirmed appointment + children)]
+    Pending --> NotifyStaff[/Notify business of request/]
+    NotifyStaff --> Await{Approved?}
+    Await -->|Approved| Create
+    Await -->|Declined| DeclineMsg[SMS customer — declined,<br/>release held slot] --> End
+    Await -->|Expires / no action| ReleaseHold
+
+    Create --> Confirm[/Send SMS confirmation<br/>with manage link — see notifications.mmd/]
+    Confirm --> Done([Booking confirmed])
+
+    %% --- Self-service manage via SMS link ---
+    Done -.-> Manage[Open manage link from SMS]
+    Manage --> MgAction{Reschedule or cancel?}
+    MgAction -->|Reschedule| ReWindow{Within reschedule policy?<br/>notice window}
+    ReWindow -->|No| TooLate[Too late online —<br/>contact business] --> End
+    ReWindow -->|Yes| ReSlot[Pick new slot] --> ReFree{Available?}
+    ReFree -->|No| ReSlot
+    ReFree -->|Yes| RePolicy{Booking policy?}
+    RePolicy -->|Auto-confirm| ReUpdate[(Update booking + free old slot)] --> ReConfirm[/Send updated SMS confirmation/] --> End
+    RePolicy -->|Requires approval — default| ReRequest[(Create reschedule request,<br/>hold new slot)] --> ReNotify[/Notify business — in-app/email/] --> End
+    MgAction -->|Cancel| CaWindow{Within cancel policy?}
+    CaWindow -->|No| TooLate
+    CaWindow -->|Yes| DoCancel[(Cancel + free slot, record reason)] --> CaNotify[/Send SMS cancellation confirmation/] --> End

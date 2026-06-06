@@ -1,0 +1,67 @@
+%% Notifications — event-driven + scheduled messaging (SMS-first for PH, email where natural)
+%% This is shared infra invoked by other workflows; it does not own business logic, only delivery.
+%% Channels: SMS via Semaphore (PH local aggregator, primary), Email (verification, staff invites, optional copies).
+%% Keep SMS single-segment GSM-7 (≤160 chars, no emoji/accents) to avoid multi-segment billing.
+flowchart TD
+    %% --- Two ways a notification originates ---
+    subgraph Triggers
+        EvtOTP[Public booking: OTP requested]
+        EvtVerify[Signup: email verification]
+        EvtInvite[Staff invite created]
+        EvtConfirm[Booking confirmed / rescheduled / cancelled]
+        EvtRequest[Booking request received → business]
+        EvtDecision[Request approved / declined → customer]
+        Sched[Scheduler tick]
+    end
+
+    %% --- Scheduled reminders resolve to concrete events ---
+    Sched --> ScanDue[Scan upcoming appointments]
+    ScanDue --> LeadTime{Booked ≥ 5h ahead?}
+    LeadTime -->|No, < 5h lead| NoReminder[Skip — too close to send] --> End([Done])
+    LeadTime -->|Yes| DueNow{Reminder due?<br/>5h before start}
+    DueNow -->|No, not yet| End
+    DueNow -->|Yes| EvtReminder[Appointment reminder]
+
+    %% --- All events funnel into the dispatcher ---
+    EvtOTP --> Build
+    EvtVerify --> Build
+    EvtInvite --> Build
+    EvtConfirm --> Build
+    EvtRequest --> Build
+    EvtDecision --> Build
+    EvtReminder --> Build
+
+    Build[Build message:<br/>template + recipient + channel + locale] --> Audience{Recipient audience?}
+
+    %% Business-facing alerts never use SMS (cost control) — in-app + email only
+    Audience -->|Business: new request,<br/>staff alerts| BizDeliver[/Deliver in-app + email<br/>never SMS/] --> Logged
+
+    %% Customer/user-facing messages choose a channel by type
+    Audience -->|Customer / user| Channel{Channel for this type?}
+    Channel -->|Transactional auth<br/>OTP, reminder, booking updates| SMS[Resolve SMS recipient]
+    Channel -->|Email-native<br/>email verification, staff invite| Email[Resolve email recipient]
+
+    %% --- Always-send: OTP, email verification, cancellations. Opt-out: reminders + booking confirmations ---
+    SMS --> Essential{Essential message?<br/>OTP, email verification, cancellation}
+    Essential -->|No — reminder / booking confirmation| OptOut{Recipient opted out?}
+    OptOut -->|Yes| Skip[Skip + log suppressed] --> End
+    OptOut -->|No| SendSMS
+    Essential -->|Yes| SendSMS[/Send via Semaphore SMS/]
+    Email --> SendEmail[/Send via email provider/]
+
+    %% --- Delivery handling ---
+    SendSMS --> SMSResult{Delivered?}
+    SMSResult -->|Yes| Logged[(Log delivery + status)]
+    SMSResult -->|No| Retry{Retries left?}
+    Retry -->|Yes| SendSMS
+    Retry -->|No| Fallback{Email on file?}
+    Fallback -->|Yes| SendEmail
+    Fallback -->|No| FailLog[(Log failure + flag for follow-up)] --> End
+
+    SendEmail --> EmailResult{Delivered?}
+    EmailResult -->|Yes| Logged
+    EmailResult -->|No| EmailRetry{Retries left?}
+    EmailRetry -->|Yes| SendEmail
+    EmailRetry -->|No| FailLog
+
+    Logged --> End
